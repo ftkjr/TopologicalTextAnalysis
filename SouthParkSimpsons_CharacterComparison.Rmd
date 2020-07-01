@@ -1,0 +1,238 @@
+---
+title: "Mapping South Park and Simpsons Character Similarities"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+
+```{r packages, message=F, warning=F}
+library(readr)
+library(magrittr)
+library(tidyverse)
+library(tidytext)
+data("stop_words")
+library(text2vec)
+library(igraph)
+library(FredsVietorisRips)
+```
+
+
+\section{The Data}
+
+Two Sets:
+
+\begin{itemize}
+  \item South Park Dialogue 
+  \item Simpsons Dialogue
+\end{itemize}
+
+Both are broken down by character, so we go for low hanging fruit and create
+a character map.
+
+```{r data, message=F, warning=F}
+
+##### Import South Park ####
+# 1. Import Data
+# 2. We want just the Character and the line
+southpark_og <- read_csv("D:/southpark.csv") %>%
+  select(Character, Line)
+
+##### Clean South Park Set ####
+# 1. Count the lines per character
+# 2. Filter for characters with more than 500 lines
+# 3. Remove stop words
+# 4. Group text by character
+sp <- southpark_og %>%
+  group_by(Character) %>%
+  add_count() %>%
+  filter(n > 500) %>%
+  ungroup() %>%
+  unnest_tokens(word, Line) %>%
+  anti_join(stop_words) %>%
+  group_by(Character) %>%
+  summarise(text = str_c(word, collapse = " ")) %>%
+  ungroup()
+  
+##### Import Simpsons ####
+# 1. Import Data
+# 2. Rename columns to match South Park data
+simpsons_og <- read_csv("D:/simpsons.csv") %>%
+  rename(Line = spoken_words,
+         Character = raw_character_text) %>%
+  filter(!is.na(Line))
+
+##### Clean Simpsons Set ####
+# 1. Count the lines per character
+# 2. Filter for characters with more than 500 lines
+# 3. Remove stop words
+# 4. Group text by character
+sm <- simpsons_og %>%
+  group_by(Character) %>%
+  add_count() %>%
+  filter(n > 500) %>%
+  ungroup() %>%
+  unnest_tokens(word, Line) %>%
+  anti_join(stop_words) %>%
+  group_by(Character) %>%
+  summarise(text = str_c(word, collapse = " ")) %>%
+  ungroup()
+
+##### Combine both full sets into one ####
+fullset <- simpsons_og %>%
+  full_join(southpark_og, by = c("Character", "Line")) %>%
+  select(Character, Line)
+```
+
+\section{Combine and Compare}
+We combine the sets of cleaned data then compare the similarities of characters 
+dialogue. 
+
+
+```{r combined_lines}
+##### Combine clean sets ####
+clines <- sp %>%
+  full_join(sm)
+```
+
+One the dialogue is combined we can process the data similar to the way that 
+we have previously evaluated the episodes of South Park against one another.
+ 
+```{r tokenize}
+##### Tokenize Sample ####
+it_sample <- clines$text %>%
+  itoken(progressbar = FALSE)
+```
+
+```{r vectorizer}
+##### Vectorize (?) ####
+vectorizer <- fullset$Line %>%
+  itoken(progressbar = FALSE) %>%
+  create_vocabulary() %>%
+  prune_vocabulary() %>% 
+  vocab_vectorizer()
+```
+
+```{r doc_term_mat}
+##### Document Term Matrix ####
+dtm_sample <- create_dtm(it_sample, vectorizer)
+# dim(dtm_sample)
+
+##### Jaccard Similarity ####
+jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
+# dim(jacsim)
+
+##### Convert fancy object to matrix ####
+jsmat <- jacsim %>%
+  as.matrix() 
+
+# Flip it around so 1 is max distance 
+# and 0 indicates two sets are the same
+jsmat <- 1 - jsmat 
+
+```
+
+\section{Map It!}
+
+
+```{r plot_adjacencies}
+##### Plot Adjacencies ####
+for (ep in c(.63, .64, .65, .7, .75, .8, .85)) {
+  ##### Plot Adjacencies ####
+  jsmat %>%
+    AdjacencyMatrix(ep) %>%
+    graph_from_adjacency_matrix(mode = "undirected") %>%
+    plot(main=paste("Epsilon =", ep))
+}
+
+```
+
+
+
+```{r character_list}
+characters <- clines %>%
+  mutate(Point = row_number()) %>%
+  select(Point, Character)
+
+characters %>% 
+  kable(caption = "List of Characters with their associated point numbers")
+```
+
+\section{Analysis}
+
+We evaluate the cluster 
+$$\{2, 8, 15, 19, 27, 31, 32 \}$$
+
+
+
+```{r cluster_points}
+##### Get cluster ####
+# 1. Scan for points in cluster
+# 2. Extract the cluster
+epsilon <- 0.66
+
+clist <- jsmat %>%
+  AdjacencyMatrix(epsilon) %>% 
+  FredsDBSCAN(1, 1:nrow(jsmat))
+
+clist <- clist[[1]]
+```
+
+```{r map_cluster}
+jsmat[clist, clist] %>%
+  AdjacencyMatrix(epsilon) %>%
+  graph_from_adjacency_matrix(mode = "undirected") %>%
+  plot()
+
+```
+
+```{r print_cluster_list}
+##### Nice table of characters in cluster ####
+characters[clist, ] %>%
+  kable()
+```
+
+
+
+\section{Additional Information}
+
+```{r histogram}
+jsmat %>%
+  TidyDistanceFrame() %>%
+  ggplot(aes(Value)) + 
+  geom_histogram(bins=30) + 
+  ylab(NULL) + 
+  xlab("Jaccard Distance") + 
+  ggtitle("Distribution of Jaccard Distances between Character Lines")
+```
+
+
+
+
+
+
+```{r}
+# jsmat %>%
+#   TidyDistanceFrame() %>%
+#   filter(Value > 0) %>%
+#   arrange(desc(-Value))
+```
+
+
+
+
+
+
+
+
+
+
+
