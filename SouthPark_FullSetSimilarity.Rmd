@@ -1,0 +1,184 @@
+---
+title: "Mapping All of South Park"
+author: "by Fred"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r include=FALSE}
+library(knitr)
+opts_chunk$set(
+     echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+```
+
+\begin{center}
+  "All characters and events in this show --even those based on real people-- 
+  are entirely fictional. 
+  All celebrity voices are impersonated ... poorly.
+  The following program contains coarse language and due to its content it 
+  should not be viewed by anyone."
+\end{center}
+
+
+\section{Step 1: Collect Underpants}
+
+```{r packages, warning=F, message=F, echo=TRUE}
+##### Packages ####
+# The usual suspects
+library(magrittr)
+library(tidyverse)
+
+# Text analysis
+library(text2vec)
+library(stringr)
+library(tidytext)
+data("stop_words")
+library(SnowballC)
+library(wordcloud)
+
+# Our very own
+library(FredsVietorisRips)
+
+# Graph adjacencies
+library(igraph)
+```
+
+
+
+```{r import_data}
+##### Import Data ####
+df_original <- readr::read_csv("D:/southparklines/All-seasons.csv")
+```
+
+```{r clean_data}
+df <- df_original %>%
+  unnest_tokens(word, Line) %>%
+  anti_join(stop_words, by="word") %>%
+  group_by(Season, Episode) %>%
+  summarise(text = str_c(word, collapse = " ")) %>%
+  ungroup()
+
+df <- df[-258,]
+```
+
+
+
+
+
+\section{Step 2: ?}
+
+```{r tokenize}
+##### Tokenize Sample ####
+it_sample <- df$text %>%
+  itoken(progressbar = FALSE)
+```
+
+```{r vectorizer}
+##### Vectorize (?) ####
+vectorizer <- df$text %>%
+  itoken(progressbar = FALSE) %>%
+  create_vocabulary() %>%
+  prune_vocabulary() %>% 
+  vocab_vectorizer()
+```
+
+
+
+```{r doc_term_mat}
+##### Document Term Matrix ####
+dtm_sample <- create_dtm(it_sample, vectorizer)
+# dim(dtm_sample)
+
+##### Jaccard Similarity ####
+jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
+# dim(jacsim)
+
+##### Convert fancy object to matrix ####
+jsmat <- jacsim %>%
+  as.matrix() 
+
+# Flip it around so 1 is max distance 
+# and 0 indicates two sets are the same
+jsmat <- 1 - jsmat 
+
+```
+
+```{r plot_adjmat, include=TRUE}
+##### Create Adjacency Matrix ####
+epsilon <- 0.85
+
+adjmat <- jsmat %>%
+  AdjacencyMatrix(epsilon)
+
+##### Plot Adjacencies ####
+graph_from_adjacency_matrix(adjmat, mode = "undirected") %>%
+  plot(main=paste("Epsilon =", epsilon))
+``` 
+
+
+
+
+
+
+\section{Step 3: Profit}
+
+
+\subsection{Top Ten Episodes by Similarity}
+
+The episodes which appear most similar are all sequential, a quick googling
+after referencing them to our data set shows that they are all multi part 
+episodes. 
+
+```{r echo=FALSE}
+jtf <- jsmat %>%
+  TidyDistanceFrame()
+
+jtf %>%
+  rename(Episode1 = Element1,
+         Episode2 = Element2,
+         Similarity = Value) %>%
+  arrange(desc(-Similarity)) %>%
+  head(10) %>%
+  kable(caption = "Ten Closest Pairs of Episodes")
+```
+
+
+```{r}
+clist <- FredsDBSCAN(adjmat, 3, c(1:257))
+cat("First Cluster: ", clist[[1]], "\n")
+
+```
+
+
+
+
+```{r}
+adjmat[clist[[1]], clist[[1]]] %>%
+  graph_from_adjacency_matrix(mode = "undirected") %>%
+  plot()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
