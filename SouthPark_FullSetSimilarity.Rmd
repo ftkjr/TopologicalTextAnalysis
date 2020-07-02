@@ -9,7 +9,7 @@ output:
 ```{r include=FALSE}
 library(knitr)
 opts_chunk$set(
-     echo = TRUE,
+     echo = FALSE,
   message = FALSE,
   warning = FALSE
 )
@@ -27,7 +27,7 @@ opts_chunk$set(
 
 \section{Step 1: Collect Underpants}
 
-```{r packages, warning=F, message=F, echo=TRUE}
+```{r packages, warning=F, message=F, echo=FALSE}
 ##### Packages ####
 # The usual suspects
 library(magrittr)
@@ -52,10 +52,21 @@ library(igraph)
 
 ```{r import_data}
 ##### Import Data ####
-df_original <- readr::read_csv("D:/southparklines/All-seasons.csv")
+df_original <- readr::read_csv("D:/southpark.csv")
 ```
+We clean the set following the below steps:
+\begin{enumerate} 
+  \item Unnest tokens (Separate blocks of text into single words)
+  \item Remove Stop Words
+  \item Regroup text by Episode
+\end{enumerate}
+
 
 ```{r clean_data}
+##### Clean the set ####
+# 1. Unnest tokens
+# 2. Remove Stop Words
+# 2. Group by season by episode
 df <- df_original %>%
   unnest_tokens(word, Line) %>%
   anti_join(stop_words, by="word") %>%
@@ -63,14 +74,15 @@ df <- df_original %>%
   summarise(text = str_c(word, collapse = " ")) %>%
   ungroup()
 
+# Remove weird last entry
 df <- df[-258,]
 ```
 
 
-
-
-
 \section{Step 2: ?}
+
+We create a document term matrix using the package `text2vec` and use their 
+`sim2()` with `method = "jaccard"` and `norm = "none"`
 
 ```{r tokenize}
 ##### Tokenize Sample ####
@@ -79,7 +91,7 @@ it_sample <- df$text %>%
 ```
 
 ```{r vectorizer}
-##### Vectorize (?) ####
+##### Vectorize (???) ####
 vectorizer <- df$text %>%
   itoken(progressbar = FALSE) %>%
   create_vocabulary() %>%
@@ -93,7 +105,9 @@ vectorizer <- df$text %>%
 ##### Document Term Matrix ####
 dtm_sample <- create_dtm(it_sample, vectorizer)
 # dim(dtm_sample)
+```
 
+```{r jaccard_similarity}
 ##### Jaccard Similarity ####
 jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
 # dim(jacsim)
@@ -102,15 +116,50 @@ jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
 jsmat <- jacsim %>%
   as.matrix() 
 
+##### Jaccard Distance ####
 # Flip it around so 1 is max distance 
 # and 0 indicates two sets are the same
 jsmat <- 1 - jsmat 
 
 ```
 
+The `sim2()` call gives us a Jaccard Similarity, which returns a value of 1 when two sets are the same. 
+
+\begin{equation*}
+  J_{\text{Simmilarity}} = \frac{ | A \cap B | }{ |A| + |B| - |A \cap B| }
+\end{equation*}
+
+We instead want the Jaccard Distance, where two equal sets have a value of 0.
+\begin{equation*}
+  J_{\text{Distance}} = 1 - \frac{ | A \cap B | }{ |A| + |B| - |A \cap B| }
+\end{equation*}
+
+
+From this matrix of distances we can use our very own `FredsVietorisRips` R 
+package to create an adjacency matrix.
+Using that adjacency matrix and the R package `igraph` we can
+`graph_from_adjacency_matrix` for visualizations.
+
+
+```{r}
+td <- jsmat %>%
+  TidyDistanceFrame() %>%
+  rename(Distance = Value)
+
+td %>%
+  ggplot(aes(Distance)) + 
+  geom_histogram(bins = 30) + 
+  geom_vline(xintercept = mean(td$Distance, na.rm = T), color = "red") + 
+  ggtitle("Distribution of Episode Distances",
+          "Red line indicates mean distance across set")
+
+ep <- mean(td$Distance, na.rm = TRUE) - 1 * sd(td$Distance, na.rm = TRUE)
+```
+
+
 ```{r plot_adjmat, include=TRUE}
 ##### Create Adjacency Matrix ####
-epsilon <- 0.85
+epsilon <- ep
 
 adjmat <- jsmat %>%
   AdjacencyMatrix(epsilon)
@@ -124,8 +173,8 @@ graph_from_adjacency_matrix(adjmat, mode = "undirected") %>%
 
 
 
-
 \section{Step 3: Profit}
+
 
 
 \subsection{Top Ten Episodes by Similarity}
@@ -140,9 +189,8 @@ jtf <- jsmat %>%
 
 jtf %>%
   rename(Episode1 = Element1,
-         Episode2 = Element2,
-         Similarity = Value) %>%
-  arrange(desc(-Similarity)) %>%
+         Episode2 = Element2) %>%
+  arrange(desc(-Distance)) %>%
   head(10) %>%
   kable(caption = "Ten Closest Pairs of Episodes")
 ```
@@ -168,6 +216,84 @@ adjmat[clist[[1]], clist[[1]]] %>%
 
 
 
+
+\clearpage
+\section{Code Appendix}
+The code used in creating the above document:
+```{r include=TRUE, echo=TRUE, eval=FALSE}
+##### Packages ####
+# The usual suspects
+library(magrittr)
+library(tidyverse)
+
+# Text analysis
+library(text2vec)
+library(stringr)
+library(tidytext)
+data("stop_words")
+library(SnowballC)
+library(wordcloud)
+
+# Our very own
+library(FredsVietorisRips)
+
+# Graph adjacencies
+library(igraph)
+
+##### Import Data ####
+df_original <- readr::read_csv("D:/southpark.csv")
+
+##### Clean the set ####
+# 1. Unnest tokens
+# 2. Remove Stop Words
+# 2. Group by season by episode
+df <- df_original %>%
+  unnest_tokens(word, Line) %>%
+  anti_join(stop_words, by="word") %>%
+  group_by(Season, Episode) %>%
+  summarise(text = str_c(word, collapse = " ")) %>%
+  ungroup()
+
+# Remove weird last entry
+df <- df[-258,]
+
+#########################
+# Note for the appendix #
+#########################
+# In the notes below, 
+# where we use the word "Sample" 
+# we mean the whole set
+
+##### Tokenize Sample ####
+it_sample <- df$text %>%
+  itoken(progressbar = FALSE)
+
+##### Vectorize (???) ####
+vectorizer <- df$text %>%
+  itoken(progressbar = FALSE) %>%
+  create_vocabulary() %>%
+  prune_vocabulary() %>% 
+  vocab_vectorizer()
+
+
+##### Document Term Matrix ####
+dtm_sample <- create_dtm(it_sample, vectorizer)
+# dim(dtm_sample)
+
+##### Jaccard Similarity ####
+jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
+# dim(jacsim)
+
+##### Convert fancy object to matrix ####
+jsmat <- jacsim %>%
+  as.matrix() 
+
+##### Jaccard Distance ####
+# Flip it around so 1 is max distance 
+# and 0 indicates two sets are the same
+jsmat <- 1 - jsmat 
+
+```
 
 
 

@@ -1,0 +1,329 @@
+---
+title: "Episode Jaccard Similarity"
+subtitle: "Mapping South Park"
+author: "by Fred"
+output:
+  pdf_document: default
+  html_notebook: default
+urlcolor: blue
+---
+
+```{r include=FALSE}
+library(knitr)
+opts_chunk$set(
+     echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+
+```
+
+
+
+```{r packages}
+##### Packages ####
+# The usual suspects
+library(readr)
+library(magrittr)
+library(tidyverse)
+
+# Text analysis
+library(text2vec)
+library(stringr)
+library(tidytext)
+data("stop_words")
+library(SnowballC)
+library(wordcloud)
+
+# Our very own
+library(FredsVietorisRips)
+
+# Graph adjacencies
+library(igraph)
+```
+
+\section{Step 1: Collect Underpants}
+\subsection{The Data}
+
+```{r import_data}
+##### Import Data ####
+df_original <- read_csv("D:/southparklines/All-seasons.csv")
+```
+
+We found our data on a post from 
+\href{https://www.kaggle.com/tovarischsukhov/southparklines}
+{some generous soul on Kaggle.}
+We hoped to find some distinct set of text which was sufficiently binned. 
+The set has 
+\begin{itemize}
+  \item Season
+  \item Episode
+  \item Character
+  \item Lines
+\end{itemize}
+
+We present one grouping, Episode by Season, and their similarities.
+
+\section{Step 2: ???}
+\subsection{Jaccard Simliarity}
+
+\begin{equation*}
+  J = \frac{ | A \cap B | }{ |A| + |B| - |A \cap B| }
+\end{equation*}
+
+Below we map the Jaccard Similarity across episodes of South Park in two 
+different ways. 
+We first map episods with stop words left in then proceed to re run our 
+analysis with stop words removed. 
+
+\subsubsection{A note on both analyses}
+We used a `doc_proportion_max` of 0.05 
+
+From the documentation:
+"maximum proportion of documents which should contain term."
+
+
+\subsection{Stop Words Not Removed}
+
+```{r sample_data}
+
+df_oc <- df_original %>%
+  group_by(Season, Episode) %>%
+  summarise(text = str_c(Line, collapse = " ")) %>%
+  ungroup()
+
+set.seed(22)
+df <- df_oc %>%
+  sample_n(50) 
+```
+
+```{r tokenize}
+##### Tokenize Sample ####
+it_sample <- df$text %>%
+  itoken(progressbar = FALSE)
+```
+
+```{r vectorizer}
+vectorizer <- df_oc$text %>%
+  itoken(progressbar = FALSE) %>%
+  create_vocabulary() %>%
+  prune_vocabulary(doc_proportion_max = 0.05) %>% 
+  vocab_vectorizer()
+```
+
+
+
+```{r doc_term_mat}
+##### Document Term Matrix ####
+dtm_sample <- create_dtm(it_sample, vectorizer)
+# dim(dtm_sample)
+
+##### Jaccard Similarity ####
+jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
+# dim(jacsim)
+
+##### Convert fancy object to matrix ####
+jsmat <- jacsim %>%
+  as.matrix() 
+
+# Flip it around so 1 is max distance 
+# and 0 indicates two sets are the same
+jsmat <- 1 - jsmat 
+
+##### Determine adjacencies ####
+epsilon <- 0.985
+
+adjmat <- jsmat %>%
+  AdjacencyMatrix(epsilon)
+```
+
+```{r plot_adjmat, include=TRUE}
+graph_from_adjacency_matrix(adjmat, mode = "undirected") %>%
+  plot(main="Epsilon = 0.985")
+``` 
+
+
+
+\subsection{Stop Words Removed}
+
+```{r remove_stop_words}
+df_oc <- df_original %>%
+  unnest_tokens(word, Line) %>%
+  anti_join(stop_words) %>%
+  group_by(Season, Episode) %>%
+  summarise(text = str_c(word, collapse = " ")) %>%
+  ungroup()
+
+# 
+# df_original <- df_original %>%
+#   group_by(Season, Episode) %>%
+#   summarise(text = str_c(Line, collapse = " ")) %>%
+#   ungroup()
+
+set.seed(22)
+df <- df_oc %>%
+  sample_n(50) 
+
+##### Tokenize Sample ####
+it_sample <- df$text %>%
+  itoken(progressbar = FALSE)
+
+vectorizer <- df_oc$text %>%
+  itoken(progressbar = FALSE) %>%
+  create_vocabulary() %>%
+  prune_vocabulary(doc_proportion_max = 0.05) %>% 
+  vocab_vectorizer()
+
+##### Document Term Matrix ####
+dtm_sample <- create_dtm(it_sample, vectorizer)
+# dim(dtm_sample)
+
+##### Jaccard Similarity ####
+jacsim <- sim2(dtm_sample, dtm_sample, method = "jaccard", norm = "none")
+# dim(jacsim)
+
+
+jsmat <- jacsim %>%
+  as.matrix() 
+
+jsmat <- 1 - jsmat 
+
+
+adjmat <- jsmat %>%
+  AdjacencyMatrix(epsilon = 0.9825)
+```
+
+Where $\epsilon = 0.9825$
+
+```{r noStopWords_plot_adjmat, include=TRUE}
+graph_from_adjacency_matrix(adjmat, mode = "undirected") %>%
+  plot()
+``` 
+
+\subsection{A Quick Thought}
+We notice in the two above charts that the connections between points 7-37, 10-6,
+and 25-48 persist. 
+
+Further investigation needs to be done to determine why these sets of episodes
+are paired.
+
+
+\section{As $\epsilon$ gets bigger}
+
+```{r varrying_epsilon_plots}
+for (ep in c(0.9825, .985, .9875, .99)) {
+  adjmat <- jsmat %>%
+  AdjacencyMatrix(epsilon = ep)
+  
+  graph_from_adjacency_matrix(adjmat, mode = "undirected") %>%
+  plot(main=paste("Epsilon of", ep))
+}
+```
+
+
+\section{Step 3: Profit}
+We filtered out words that only occured in one episode, then plotted their tfidf
+score to find the most important words in common to both episodes. 
+
+
+```{r}
+# 25-48
+# Season 4 episode 7 (mislabeled as 408) and Season 8 episode 8
+
+
+tdf <- df %>%
+  group_by(Season, Episode) %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words) %>% 
+  mutate(wordstem = wordStem(word)) %>%
+  count(Season, Episode, wordstem) %>%
+  bind_tf_idf(wordstem, Episode, n)
+
+ep2_stemmed <- tdf %>%
+  filter(Season == c(4, 8),
+         Episode == 8) %>%
+  ungroup() %>%
+  add_count(wordstem, name = "instances") %>%
+  filter(instances > 1)
+
+ep2_stemmed$Season[ep2_stemmed$Season == 4] <- c("Chef Goes Nanners")
+ep2_stemmed$Season[ep2_stemmed$Season == 8] <- c("Douche and Turd")
+
+ep2_stemmed %>%
+  filter(n > 1,
+         tf_idf > 0) %>%
+  ggplot(aes(x = reorder(wordstem, tf_idf),
+             y = tf_idf)) + 
+  geom_col() + 
+  coord_flip() +
+  facet_wrap(~Season) +
+  ggtitle("Most Important Words Common to both Episodes")
+```
+
+\subsection{Season 4, Episode 7: Chef Goes Nanners}
+\subsubsection{IMDB Description}
+\begin{center}
+  Chef and Jimbo are debating whether the flag of South Park, which depicts four white figures lynching a black figure, should be kept. 
+  Jimbo wants to keep the flag out of tradition, while Chef feels it's a racist symbol. 
+  As the debate spreads through the town, the mayor backs out of making a judgment, saying the issue will be decided by a debate held by the schoolchildren. 
+  This pits Wendy and Cartman, who want it changed, against Stan, Kyle and Kenny, who don't see anything wrong with the flag as it is.
+\end{center}
+
+
+\subsection{Season 8, Episode 8: Douche and Turd}
+
+\subsubsection{IMDB Description}
+\begin{center}
+  Stan refuses to vote in the school mascot election because his choices are a giant douche and a turd sandwich.
+  Unfortunately, his views on voting are seen as un-American, and he is ultimately banished from the town. 
+\end{center}
+
+```{r ep407}
+
+e407 <- ep2_stemmed %>%
+  filter(Season == "Chef Goes Nanners")
+
+wordcloud(e407$wordstem, freq = e407$tf_idf, c(8, .3), 
+          main = "Season 4 Episode 07: Chef Goes Nanners")
+```
+
+
+```{r ep808}
+e808 <- ep2_stemmed %>%
+  filter(Season == "Douche and Turd")
+
+wordcloud(e808$wordstem, freq = e808$tf_idf, max.words = 20)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
